@@ -5,6 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Any
 import time
+
 import numpy as np
 import cv2
 
@@ -53,6 +54,52 @@ class DetectResult:
     meshes: list[MeshTarget]
     next_action: str
     message: str
+
+def _find_projection_peaks(
+    roi_mask: np.ndarray,
+    roi_y0: int,
+    config: DetectorConfig,
+    y_center: float | None = None,
+    y_half_width: float = 120.0,
+)-> list[tuple[float, float]]:
+    band_mask = roi_mask.copy()
+    if y_center is not None:
+        band_mask = np.zeros_like(roi_mask)
+        y1 = max(0, int(y_center - y_half_width) - roi_y0)
+        y2 = min(roi_mask.shape[0], int(y_center + y_half_width) - roi_y0)
+        if y2 > y1:
+            band_mask[y1:y2, :] = roi_mask[y1:y2, :]
+    
+    projection = np.sum(band_mask > 0, axis=0).astype(np.float32)
+    kernel = max(3, int(config.projection_smooth_kernel))
+    if kernel % 2 == 0:
+        kernel += 1
+    smooth = np.convolve(projection, np.ones(kernel, dtype=np.float32) / kernel, mode="same")
+    threshold = float(smooth.max() * config.min_peak_projection)
+    peaks: list[int] = []
+    for x in range(config.edge_margin_px, roi_mask.shape[1] - config.edge_margin_px):
+        if smooth[x] < threshold:
+            continue
+        if smooth[x] < smooth[x - 1] or smooth[x] < smooth[x + 1]:
+            continue
+        if peaks and x - peaks[-1] < config.min_peak_distance_px:
+            if smooth[x] > smooth[peaks[-1]]:
+                peaks[-1] = x
+            continue
+        peaks.append(x)
+    centers: list[tuple[float, float]] = []
+    half_window = 45
+    for peak_x in peaks:
+        x1 = max(0, peak_x - half_window)
+        x2 = min(roi_mask.shape[1], peak_x + half_window)
+        patch = roi_mask[:, x1:x2]
+        ys, xs = np.where(patch > 0)
+        if len(xs) < 30:
+            continue
+        center_x = x1 + float(np.mean(xs))
+        center_y = roi_y0 + float(np.mean(ys))
+        centers.append((center_x, center_y))
+    return centers
 
 def _rect_angle_deg(
     rect: tuple[tuple[float, float], tuple[float, float], float]
@@ -228,7 +275,7 @@ def detect_meshes_ringlight(
         if aspect < config.min_aspect:
             continue
 
-        contour_candidates,extend(
+        contour_candidates.extend(
             _split_wide_blob(contour, config.nominal_mesh_width_px, config.split_ratio)
 
         )
@@ -250,9 +297,12 @@ def detect_meshes_ringlight(
         if config.debug:
             debug_images["09_contour_components"] = component_vis
         
-        
-    
-    pass
+        projection_centers = _find_projection_peaks(roi_mask, roi_y0, config)
+        projection_vis = image_bgr.copy()
+        for peak_x, peak_y in projection_centers:
+            cv2.circle(projection_vis, (int(round(peak_x)), int(round(peak_y))), 8, (0, 0, 255), 2)
+        if config.debug:
+            debug_images["10_projection_centers"] = projection_vis
 
 def process_one_image(
     image_path:Path, 
@@ -263,9 +313,6 @@ def process_one_image(
     run_config = replace(config, debug = False) if mode == "fast" else config
     started = time.perf_counter()
 
-
-
-    pass
 
 def is_img_file(path: Path) -> bool:
     file_suffix = path.suffix.lower()

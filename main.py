@@ -67,7 +67,6 @@ class MeshTarget:
   offset_x_mm: float | None
   offset_y_mm: float | None
 
-
 @dataclass
 class DetectionResult:
   found: bool
