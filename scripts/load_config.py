@@ -54,6 +54,83 @@ class DetectResult:
     next_action: str
     message: str
 
+def _rect_angle_deg(
+    rect: tuple[tuple[float, float], tuple[float, float], float]
+)->float:
+    (_, _), (width, height), angle = rect
+    angle = float(angle)
+    if width < height:
+        angle += 90.0
+    while angle >45.0:
+        angle -= 90.0
+    while angle < -45.0:
+        angle += 90.0
+    return angle
+
+def _contour_to_mesh(
+    contour: np,ndarray
+)-> tuple[float, float, float, float, float] | None:
+    area = cv2.contourArea(contour)
+    if area <= 0:
+        return None
+    
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
+        return None
+    
+    rect = cv2.minAreaRect(contour)
+    (_, _), (width, height), _ = rect
+    short_side = max(1.0, min(width, height))
+    long_side = max(width, height)
+    aspect = long_side / short_side
+
+    center_x = moments["m10"] / moments["m00"]
+    center_y = moments["m01"] / moments["m00"]
+    mesh_width = short_side
+    mesh_height = long_side
+    return center_x, center_y, mesh_width, mesh_height, _rect_angle_deg(rect)
+
+def _split_wide_blob(
+    contour: np.ndarray,
+    nominal_width: float,
+    split_ratio: float,
+)-> list[np.ndarray]:
+    x, y, width, height = cv2.boundingRect(contour)
+    if width < nominal_width * split_ratio:
+        return [contour]
+    
+    count = max(2, int(round(width / nominal_width)))
+    step = width / count
+
+    points = contour.reshape(-1, 2)
+    slices: list[np.ndarray] = []
+
+    for index in range(count):
+        x1 = x + int(round(index * step))
+        x2 = x + int(round(index + 1) * step)
+        selected = points[(points[:, 0] >= x1) & (points[:, 0] < x2)]
+        if len(selected) < 8:
+            continue
+        slices.append(selected.reshape(-1, 1, 2).astype(np.int32))
+    
+    return slices if slices else [contour]
+
+
+
+def _apply_edge_mask(
+    mask: np.ndarray,
+    margin_px: int
+)-> np.ndarray:
+    masked = mask.copy()
+    h, w = mask.shape
+    margin = max(0,int(margin_px))
+    if margin <= 0:
+        return masked
+    masked[:, :margin] = 0
+    masked[:, w-margin:] = 0
+    masked[:, int(h*0.08), :] = 0
+    return masked
+
 def _morph_mask(
     mask: np.ndarray,
     kermnel_size: int,
@@ -113,6 +190,68 @@ def detect_meshes_ringlight(
         )
         debug_images["04_dark_mask_raw"] = cv2.cvtColor(threshold_vis, cv2.COLOR_GRAY2BGR)
 
+    morphed = _morph_mask(dark_mask, config.morph_kernel, config.morgh_close_iter)
+    if config.debug:
+        debug_images["05_dark_mask_morph"] = cv2.cvtColor(morphed,cv2.COLOR_GRAY2BGR)
+    
+    edge_masked = _apply_edge_mask(morphed, config.edge_argin_px)
+    if config.debug:
+        debug_images["06-edge_masked"] = cv2.cvtColor(edge_masked, cv2.COLOR_GRAY2BGR)
+    
+    roi_y0 = int(height * config.roi_y_ration)
+    roi_mask = np.zeros_like(edge_masked)
+    roi_mask[roi_y0:, :] = edge_masked[roi_y0:, :]
+    if config.debug:
+        roi_vis = image_bgr.copy()
+        cv2.rectangle(roi_vis, (0, roi_y0), (width - 1, height - 1), (0, 255, 255), 2)
+        cv2.rectangle(
+            roi_vis, 
+            (config.edge_margin_px, roi_y0),
+            (width - config.edge_margin_px, height - 1),
+            (255, 0, 0),
+            2,
+            )
+        debug_images["07_roi_overlay"] = roi_vis
+        debug_images["08_roi_mask"] = cv2.cvtColor(roi_mask, cv2.COLOR_GRAY2BGR)
+
+    max_area = height * width * config.max_area_ratio
+    contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_candidates: list[np.ndarray] = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < config.min_area or area > max_area:
+            continue
+        
+        _, _, box_width, box_height = cv2.boundingRect(contour)
+        aspect = max(box_width, box_height) / max(1, min(box_width, box_height))
+        if aspect < config.min_aspect:
+            continue
+
+        contour_candidates,extend(
+            _split_wide_blob(contour, config.nominal_mesh_width_px, config.split_ratio)
+
+        )
+
+        contour_centers: list[tuple[float, float, float, float, float]] = []
+        component_vis = image_bgr.copy()
+        for contour in contour_candidates:
+            mesh = _contour_to_mesh(contour)
+            if mesh is None:
+                continue
+
+            cx, cy, mesh_width, mesh_height, angle = mesh
+            if not (200 <= mesh_height <= 450 and 40 <= mesh_width <= 120):
+                continue
+
+            contour_centers.append(mesh)
+            cv2.drawContours(component_vis, [contour], -1, (255, 0, 0), 2)
+            cv2.circle(component_vis, (int(round(cx)), int(round(cy))), 5, (0, 255, 0), -1)
+        if config.debug:
+            debug_images["09_contour_components"] = component_vis
+        
+        
+    
     pass
 
 def process_one_image(

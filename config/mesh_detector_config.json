@@ -1,0 +1,19 @@
+{
+  "blur_kernel": 5,
+  "morph_kernel": 3,
+  "morph_close_iter": 1,
+  "threshold_value": 0,
+  "roi_y_ratio": 0.50,
+  "edge_margin_px": 280,
+  "min_area": 8000,
+  "max_area_ratio": 0.04,
+  "min_aspect": 1.5,
+  "split_width_ratio": 1.45,
+  "nominal_mesh_width_px": 85.0,
+  "min_peak_projection": 0.30,
+  "projection_smooth_kernel": 21,
+  "min_peak_distance_px": 40,
+  "pixel_size_mm": 0.0,
+  "output_dir": "output/mesh_detect",
+  "debug": true
+}
