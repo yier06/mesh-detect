@@ -1,0 +1,12 @@
+# Conda 环境定义（可选，与 requirements.txt 二选一）
+# 用法: conda env create -f environment.yml
+
+name: mesh_detect
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -r requirements.txt

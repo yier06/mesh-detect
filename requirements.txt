@@ -1,0 +1,5 @@
+# mesh_detect 项目依赖
+# Python >= 3.10 推荐 3.11
+
+opencv-python>=4.8.0,<5.0.0
+numpy>=1.24.0,<3.0.0
